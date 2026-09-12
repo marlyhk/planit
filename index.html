@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f8f4ef" />
+  <meta name="description" content="Planit — a calm personal planner for university, tutoring, sessions, payments and receipts." />
+  <title>planit.</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <div class="brand-wrap">
+        <button class="brand-button" id="brandButton" aria-label="Go to dashboard">
+          <span class="brand-word">planit<span class="brand-dot">.</span></span>
+          <span class="brand-tagline">everything, in its place.</span>
+        </button>
+        <button class="icon-btn sidebar-collapse" id="sidebarCollapse" aria-label="Collapse sidebar" title="Collapse sidebar">‹</button>
+      </div>
+
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="dashboard"><span class="nav-icon">⌂</span><span>Dashboard</span></button>
+        <button class="nav-item" data-view="calendar"><span class="nav-icon">▦</span><span>Calendar</span></button>
+
+        <div class="nav-label">University</div>
+        <button class="nav-item" data-view="courses"><span class="nav-icon">◫</span><span>Courses</span></button>
+        <button class="nav-item" data-view="assignments"><span class="nav-icon">✓</span><span>Assignments</span></button>
+        <button class="nav-item" data-view="exams"><span class="nav-icon">◇</span><span>Exams</span></button>
+
+        <div class="nav-label">Tutoring</div>
+        <button class="nav-item" data-view="students"><span class="nav-icon">○</span><span>Students</span></button>
+        <button class="nav-item" data-view="groups"><span class="nav-icon">◎</span><span>Groups</span></button>
+        <button class="nav-item" data-view="sessions"><span class="nav-icon">◷</span><span>Sessions</span></button>
+
+        <div class="nav-label">Money</div>
+        <button class="nav-item" data-view="finances"><span class="nav-icon">$</span><span>Finances</span></button>
+        <button class="nav-item" data-view="receipts"><span class="nav-icon">▤</span><span>Receipts</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <button class="nav-item" data-view="settings"><span class="nav-icon">⚙</span><span>Settings</span></button>
+      </div>
+    </aside>
+
+    <div class="mobile-topbar">
+      <button class="brand-button compact" id="mobileBrandButton" aria-label="Go to dashboard"><span class="brand-word">planit<span class="brand-dot">.</span></span></button>
+      <button class="icon-btn" id="mobileMenuButton" aria-label="Open navigation">☰</button>
+    </div>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <h1 class="page-title" id="pageTitle">Dashboard</h1>
+          <p class="page-subtitle" id="pageSubtitle">A calm view of what matters today.</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="sync-pill" id="syncStatus" type="button" title="Cloud sync status"><span class="sync-dot"></span><span id="syncStatusText">Local</span></button>
+          <button class="search-button" id="searchButton"><span>⌘ K</span><strong>Search Planit…</strong></button>
+          <button class="btn btn-primary compact-btn" id="quickAddButton">＋ Add</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-dashboard" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-calendar" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-courses" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-assignments" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-exams" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-students" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-groups" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-sessions" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-finances" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-receipts" aria-labelledby="pageTitle"></section>
+      <section class="view" id="view-settings" aria-labelledby="pageTitle"></section>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Mobile navigation">
+      <button class="bottom-nav-item active" data-view="dashboard"><span>⌂</span><small>Home</small></button>
+      <button class="bottom-nav-item" data-view="calendar"><span>▦</span><small>Calendar</small></button>
+      <button class="bottom-nav-item" data-view="sessions"><span>◷</span><small>Tutor</small></button>
+      <button class="bottom-nav-item" data-view="courses"><span>◫</span><small>Uni</small></button>
+      <button class="bottom-nav-item" data-view="settings"><span>•••</span><small>More</small></button>
+    </nav>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modalBackdrop"></div>
+  <div class="modal hidden" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-head">
+      <div><h2 id="modalTitle">Add</h2><p id="modalSubtitle"></p></div>
+      <button class="icon-btn" id="modalClose" aria-label="Close">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+
+  <aside class="drawer" id="drawer" aria-label="Details panel">
+    <div class="drawer-head">
+      <div><p class="eyebrow" id="drawerEyebrow"></p><h2 id="drawerTitle">Details</h2></div>
+      <button class="icon-btn" id="drawerClose" aria-label="Close details">×</button>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
+  <div class="command-backdrop hidden" id="commandBackdrop"></div>
+  <div class="command-palette hidden" id="commandPalette" role="dialog" aria-modal="true" aria-label="Search Planit">
+    <input id="commandInput" type="search" placeholder="Search students, courses, sessions…" autocomplete="off" />
+    <div id="commandResults" class="command-results"></div>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+  <template id="emptyTemplate">
+    <div class="empty-state">
+      <div class="empty-dot">✦</div>
+      <h3></h3>
+      <p></p>
+      <button class="btn btn-secondary compact-btn"></button>
+    </div>
+  </template>
+
+  <div class="auth-gate hidden" id="authGate" aria-live="polite">
+    <div class="auth-card">
+      <div class="auth-brand">planit<span>.</span></div>
+      <p class="auth-kicker">PRIVATE CLOUD</p>
+      <h2>Welcome back, Marly ✦</h2>
+      <p class="auth-copy">Sign in to keep your calendar, tutoring, payments and university work synced across your MacBook, iPad and phone.</p>
+      <form id="authForm" class="auth-form">
+        <label class="form-field"><span class="form-label">Email</span><input class="input" id="authEmail" type="email" autocomplete="email" required placeholder="you@example.com"></label>
+        <label class="form-field"><span class="form-label">Password</span><input class="input" id="authPassword" type="password" autocomplete="current-password" minlength="6" required placeholder="Your private password"></label>
+        <p class="auth-error hidden" id="authError"></p>
+        <button class="btn btn-primary" type="submit" id="authSignIn">Sign in</button>
+        <button class="btn btn-secondary" type="button" id="authSignUp">Create my private account</button>
+      </form>
+      <p class="auth-foot">Your Planit data stays inside your private account. Other people do not get access to your students, payments or schedule.</p>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="cloud-config.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
