@@ -138,10 +138,10 @@
     undo: null
   };
 
-  function cloudConfig() { return window.PLANIT_CLOUD_CONFIG || {}; }
+  function cloudConfig() { return window.PLANIT_FIREBASE_CONFIG || {}; }
   function isCloudConfigured() {
     const c=cloudConfig();
-    return Boolean(c.supabaseUrl && c.supabaseAnonKey && !String(c.supabaseUrl).includes('PASTE_') && !String(c.supabaseAnonKey).includes('PASTE_'));
+    return Boolean(c.apiKey && c.projectId && c.appId && !String(c.apiKey).includes('PASTE_') && !String(c.projectId).includes('PASTE_') && !String(c.appId).includes('PASTE_'));
   }
   function hasMeaningfulData(data=state.data) {
     return Boolean((data.courses?.length||0)+(data.students?.length||0)+(data.groups?.length||0)+(data.events?.length||0)+(data.payments?.length||0));
@@ -159,7 +159,6 @@
   function clearAuthError() { const el=$('#authError'); if(el){el.textContent='';el.classList.add('hidden');} }
   function showAuthGate() { $('#authGate')?.classList.remove('hidden'); updateCloudStatus('signin','Sign in'); }
   function hideAuthGate() { $('#authGate')?.classList.add('hidden'); clearAuthError(); }
-  function allowedEmailOk(email) { const allowed=String(cloudConfig().allowedEmail||'').trim().toLowerCase(); return !allowed || String(email||'').trim().toLowerCase()===allowed; }
 
   function scheduleCloudSave() {
     if(!cloud.configured || !cloud.user || cloud.busy) return;
@@ -168,15 +167,30 @@
     updateCloudStatus(navigator.onLine?'syncing':'offline');
   }
 
+  function firebaseStateRef() {
+    if(!cloud.db || !cloud.user) return null;
+    return cloud.db.collection('users').doc(cloud.user.uid).collection('planit').doc('state');
+  }
+  function firebaseTimestampToISO(value) {
+    if(!value) return null;
+    if(typeof value.toDate==='function') return value.toDate().toISOString();
+    if(typeof value.toMillis==='function') return new Date(value.toMillis()).toISOString();
+    const d=new Date(value); return Number.isNaN(d.getTime())?null:d.toISOString();
+  }
+
   async function pushCloudState() {
     if(!cloud.configured || !cloud.user) return;
     if(!navigator.onLine){updateCloudStatus('offline');return;}
+    const ref=firebaseStateRef(); if(!ref) return;
     cloud.busy=true; updateCloudStatus('syncing');
     try {
       const payload=JSON.parse(JSON.stringify(state.data));
-      const {data,error}=await cloud.client.from('planit_state').upsert({user_id:cloud.user.id,payload},{onConflict:'user_id'}).select('updated_at').single();
-      if(error) throw error;
-      cloud.lastPushedAt=data?.updated_at||new Date().toISOString();
+      await ref.set({payload,updatedAt:window.firebase.firestore.FieldValue.serverTimestamp()},{merge:true});
+      const snap=await ref.get();
+      const stamp=firebaseTimestampToISO(snap.data()?.updatedAt)||new Date().toISOString();
+      cloud.lastPushedAt=stamp;
+      state.data.settings.updatedAt=stamp;
+      localSet(STORAGE_KEY,JSON.stringify(state.data));
       updateCloudStatus('synced');
     } catch(err) {
       console.error('Planit cloud save failed',err); updateCloudStatus('error');
@@ -185,24 +199,28 @@
 
   async function pullCloudState({quiet=false}={}) {
     if(!cloud.configured || !cloud.user || !navigator.onLine || cloud.busy) return;
+    const ref=firebaseStateRef(); if(!ref) return;
     cloud.busy=true; if(!quiet) updateCloudStatus('syncing');
     try {
-      const {data,error}=await cloud.client.from('planit_state').select('payload,updated_at').eq('user_id',cloud.user.id).maybeSingle();
-      if(error) throw error;
-      if(!data) {
-        if(hasMeaningfulData()) await cloud.client.from('planit_state').upsert({user_id:cloud.user.id,payload:state.data},{onConflict:'user_id'});
-        else await cloud.client.from('planit_state').upsert({user_id:cloud.user.id,payload:state.data},{onConflict:'user_id'});
+      let snap=await ref.get();
+      if(!snap.exists) {
+        await ref.set({payload:JSON.parse(JSON.stringify(state.data)),updatedAt:window.firebase.firestore.FieldValue.serverTimestamp()});
+        snap=await ref.get();
+        const stamp=firebaseTimestampToISO(snap.data()?.updatedAt)||new Date().toISOString();
+        cloud.lastPushedAt=stamp; state.data.settings.updatedAt=stamp; localSet(STORAGE_KEY,JSON.stringify(state.data));
         updateCloudStatus('synced'); return;
       }
+      const remote=snap.data()||{};
+      const cloudISO=firebaseTimestampToISO(remote.updatedAt);
       const localStamp=Date.parse(state.data.settings?.updatedAt||0)||0;
-      const cloudStamp=Date.parse(data.updated_at||0)||0;
+      const cloudStamp=Date.parse(cloudISO||0)||0;
       if(localStamp>cloudStamp+1200 && hasMeaningfulData()) {
         cloud.busy=false; await pushCloudState(); return;
       }
-      state.data=normalizeData(data.payload);
-      state.data.settings.updatedAt=data.updated_at||state.data.settings.updatedAt;
+      state.data=normalizeData(remote.payload);
+      state.data.settings.updatedAt=cloudISO||state.data.settings.updatedAt;
       localSet(STORAGE_KEY,JSON.stringify(state.data));
-      cloud.lastPushedAt=data.updated_at||null;
+      cloud.lastPushedAt=cloudISO||null;
       renderAllVisible();
       updateCloudStatus('synced');
     } catch(err) {
@@ -210,12 +228,9 @@
     } finally { cloud.busy=false; }
   }
 
-  async function bindCloudSession(session) {
-    if(!session?.user){cloud.user=null;showAuthGate();return;}
-    if(!allowedEmailOk(session.user.email)){
-      await cloud.client.auth.signOut(); showAuthError('This Planit is restricted to its owner email.'); return;
-    }
-    cloud.user=session.user; hideAuthGate(); updateCloudStatus('syncing');
+  async function bindCloudUser(user) {
+    if(!user){cloud.user=null;showAuthGate();return;}
+    cloud.user=user; hideAuthGate(); updateCloudStatus('syncing');
     await pullCloudState();
     clearInterval(cloud.pullTimer);
     cloud.pullTimer=setInterval(()=>pullCloudState({quiet:true}),45000);
@@ -223,32 +238,33 @@
 
   async function initCloud() {
     cloud.configured=isCloudConfigured();
-    if(!cloud.configured || !window.supabase?.createClient){updateCloudStatus('local','Local only');return;}
-    const c=cloudConfig();
-    cloud.client=window.supabase.createClient(c.supabaseUrl,c.supabaseAnonKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-    const {data:{session}}=await cloud.client.auth.getSession();
-    cloud.client.auth.onAuthStateChange((_event,nextSession)=>setTimeout(()=>bindCloudSession(nextSession),0));
-    if(session) await bindCloudSession(session); else showAuthGate();
+    if(!cloud.configured || !window.firebase?.initializeApp){
+      updateCloudStatus('error','Setup needed');
+      showAuthGate();
+      showAuthError('Planit is not connected to Firebase yet. Add the three Firebase environment variables in Vercel, then redeploy.');
+      return;
+    }
+    try {
+      const c=cloudConfig();
+      cloud.client=window.firebase.apps?.length ? window.firebase.app() : window.firebase.initializeApp(c);
+      cloud.auth=window.firebase.auth();
+      cloud.db=window.firebase.firestore();
+      try { await cloud.auth.setPersistence(window.firebase.auth.Auth.Persistence.LOCAL); } catch(err) { console.warn('Firebase auth persistence unavailable',err); }
+      cloud.auth.onAuthStateChanged(user=>{ bindCloudUser(user); });
+    } catch(err) {
+      console.error('Planit Firebase initialization failed',err); updateCloudStatus('error','Setup issue');
+    }
   }
 
   async function cloudSignIn(email,password) {
     clearAuthError();
-    if(!allowedEmailOk(email)) return showAuthError('Use the owner email configured for this Planit.');
+    if(!cloud.auth) return showAuthError('Firebase sync is not configured yet.');
     updateCloudStatus('syncing','Signing in…');
-    const {error}=await cloud.client.auth.signInWithPassword({email,password});
-    if(error){updateCloudStatus('signin','Sign in');showAuthError(error.message);}
-  }
-  async function cloudSignUp(email,password) {
-    clearAuthError();
-    if(cloudConfig().allowSignup===false) return showAuthError('New account creation is disabled for this private Planit.');
-    if(!allowedEmailOk(email)) return showAuthError('Use the owner email configured for this Planit.');
-    updateCloudStatus('syncing','Creating account…');
-    const {data,error}=await cloud.client.auth.signUp({email,password});
-    if(error){updateCloudStatus('signin','Sign in');showAuthError(error.message);return;}
-    if(!data.session){showAuthError('Account created. Check your email for the confirmation link, then sign in here.');updateCloudStatus('signin','Confirm email');}
+    try { await cloud.auth.signInWithEmailAndPassword(email,password); }
+    catch(err){ updateCloudStatus('signin','Sign in'); showAuthError(err?.message||'Could not sign in.'); }
   }
   async function cloudSignOut() {
-    if(!cloud.client)return; clearInterval(cloud.pullTimer); await cloud.client.auth.signOut(); cloud.user=null; showAuthGate();
+    if(!cloud.auth)return; clearInterval(cloud.pullTimer); await cloud.auth.signOut(); cloud.user=null; showAuthGate();
   }
 
   function chooseQuote() {
@@ -464,11 +480,11 @@
   function renderWeekCalendar(date, days=7) {
     const start=days===1?new Date(date):startOfWeek(date); const dates=Array.from({length:days},(_,i)=>addDays(start,i));
     const today=dateKey(new Date());
-    const events=filteredEvents(dates[0],dates[dates.length-1]).filter(e=>e.type!=='assignment'||e.start).sort(sortEvents);
+    const events=filteredEvents(dates[0],dates[dates.length-1]).filter(e=>e.type!=='assignment').sort(sortEvents);
     const allDay=filteredEvents(dates[0],dates[dates.length-1]).filter(e=>!e.start||e.type==='assignment');
     const cols=days===1?'52px minmax(0,1fr)':`52px repeat(${days},minmax(105px,1fr))`;
     return `<div class="week-calendar">
-      <div class="week-head" style="grid-template-columns:${cols};min-width:${days===1?'360px':'800px'}"><div></div>${dates.map(dt=>`<div class="week-head-cell ${dateKey(dt)===today?'today':''}"><span class="week-day-name">${dt.toLocaleDateString('en-US',{weekday:'short'})}</span><span class="week-day-num">${dt.getDate()}</span>${allDay.filter(e=>e.date===dateKey(dt)).slice(0,2).map(e=>`<div class="month-event" data-event-id="${e.id}" style="background:${lighten(eventColor(e),.55)};color:${contrastText(lighten(eventColor(e),.55))}">${escapeHTML(eventTitle(e))}</div>`).join('')}</div>`).join('')}</div>
+      <div class="week-head" style="grid-template-columns:${cols};min-width:${days===1?'360px':'800px'}"><div></div>${dates.map(dt=>`<div class="week-head-cell ${dateKey(dt)===today?'today':''}"><span class="week-day-name">${dt.toLocaleDateString('en-US',{weekday:'short'})}</span><span class="week-day-num">${dt.getDate()}</span>${allDay.filter(e=>e.date===dateKey(dt)).slice(0,2).map(e=>`<div class="month-event" data-event-id="${e.id}" style="background:${lighten(eventColor(e),.55)};color:${contrastText(lighten(eventColor(e),.55))}">${e.type==='assignment'&&e.start?`${escapeHTML(formatTime(e.start))} · `:''}${escapeHTML(eventTitle(e))}</div>`).join('')}</div>`).join('')}</div>
       <div class="week-body" style="grid-template-columns:${cols};min-width:${days===1?'360px':'800px'}">
         <div class="time-axis">${Array.from({length:HOUR_END-HOUR_START+1},(_,i)=>`<div class="time-label" style="top:${(i/(HOUR_END-HOUR_START))*100}%">${formatTime(`${pad(HOUR_START+i)}:00`).replace(':00','')}</div>`).join('')}</div>
         ${dates.map(dt=>`<div class="day-column ${dateKey(dt)===today?'today':''}" data-date="${dateKey(dt)}">${events.filter(e=>e.date===dateKey(dt)).map(calendarEventBlock).join('')}</div>`).join('')}
@@ -492,7 +508,7 @@
   function renderMonthCalendar(date) {
     const first=startOfMonth(date); const gridStart=startOfWeek(first); const days=42; const today=dateKey(new Date());
     const dates=Array.from({length:days},(_,i)=>addDays(gridStart,i)); const end=dates[dates.length-1]; const events=filteredEvents(gridStart,end).sort(sortEvents);
-    return `<div class="month-calendar">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<div class="month-weekday">${x}</div>`).join('')}${dates.map(dt=>{const key=dateKey(dt), dayEvents=events.filter(e=>e.date===key), outside=dt.getMonth()!==date.getMonth(); return `<div class="month-day ${outside?'outside':''} ${key===today?'today':''}" data-month-date="${key}"><div class="month-day-number">${dt.getDate()}</div>${dayEvents.slice(0,3).map(e=>`<div class="month-event" data-event-id="${e.id}" style="background:${lighten(eventColor(e),.55)};color:${contrastText(lighten(eventColor(e),.55))}">${escapeHTML(eventTitle(e))}</div>`).join('')}${dayEvents.length>3?`<div class="more-events">+${dayEvents.length-3} more</div>`:''}</div>`}).join('')}</div>`;
+    return `<div class="month-calendar">${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(x=>`<div class="month-weekday">${x}</div>`).join('')}${dates.map(dt=>{const key=dateKey(dt), dayEvents=events.filter(e=>e.date===key), outside=dt.getMonth()!==date.getMonth(); return `<div class="month-day ${outside?'outside':''} ${key===today?'today':''}" data-month-date="${key}"><div class="month-day-number">${dt.getDate()}</div>${dayEvents.slice(0,3).map(e=>`<div class="month-event" data-event-id="${e.id}" style="background:${lighten(eventColor(e),.55)};color:${contrastText(lighten(eventColor(e),.55))}">${e.type==='assignment'&&e.start?`${escapeHTML(formatTime(e.start))} · `:''}${escapeHTML(eventTitle(e))}</div>`).join('')}${dayEvents.length>3?`<div class="more-events">+${dayEvents.length-3} more</div>`:''}</div>`}).join('')}</div>`;
   }
   function renderAgenda(date) {
     const start=new Date(date), end=addDays(start,30); const events=filteredEvents(start,end).sort(sortEvents);
@@ -634,14 +650,14 @@
   function renderSettings() {
     const el=$('#view-settings');
     el.innerHTML=`<div class="content-grid grid-2"><div class="card"><div class="card-head"><div><h3 class="card-title">Personal</h3><p class="card-subtitle">Small defaults that keep Planit fast.</p></div></div><div class="form-grid"><label class="form-field full"><span class="form-label">Your name</span><input class="input" id="settingName" value="${escapeHTML(state.data.settings.name)}"></label><label class="form-field"><span class="form-label">Currency symbol</span><input class="input" id="settingCurrency" value="${escapeHTML(state.data.settings.currency)}" maxlength="4"></label><label class="form-field"><span class="form-label">Default tutoring duration</span><select class="select" id="settingDuration">${durationOptions(state.data.settings.defaultDuration)}</select></label><label class="form-field"><span class="form-label">Calendar snap</span><select class="select" id="settingSnap"><option value="15" ${state.data.settings.snapMinutes===15?'selected':''}>15 minutes</option><option value="30" ${state.data.settings.snapMinutes===30?'selected':''}>30 minutes</option></select></label></div><div style="margin-top:12px"><button class="btn btn-primary compact-btn" id="saveSettings">Save settings</button></div></div>
-      <div class="card"><div class="card-head"><div><h3 class="card-title">Private cloud sync</h3><p class="card-subtitle">Use one private account on your MacBook, iPad and phone.</p></div><span class="badge badge-neutral">${cloud.configured?(cloud.user?'Connected':'Sign in'):'Setup needed'}</span></div><div class="detail-block"><div class="detail-tile"><span>Status</span><strong>${cloud.configured?(cloud.user?'Cloud sync active':'Cloud configured · sign in'):'Local only'}</strong></div>${cloud.user?`<div class="detail-tile"><span>Signed in as</span><strong>${escapeHTML(cloud.user.email||'Private account')}</strong></div>`:''}</div><div class="action-row">${cloud.configured&&cloud.user?`<button class="btn btn-secondary compact-btn" id="syncNow">Sync now</button><button class="btn btn-ghost compact-btn" id="cloudSignOut">Sign out</button>`:`<button class="btn btn-secondary compact-btn" id="cloudSetupHelp">Cloud setup guide</button>`}</div><p class="card-subtitle" style="margin-top:10px">Planit keeps a local copy for speed and saves the same private data to your cloud account when connected.</p></div>
+      <div class="card"><div class="card-head"><div><h3 class="card-title">Private cloud sync</h3><p class="card-subtitle">Use one private account on your MacBook, iPad and phone.</p></div><span class="badge badge-neutral">${cloud.configured?(cloud.user?'Connected':'Sign in'):'Setup needed'}</span></div><div class="detail-block"><div class="detail-tile"><span>Status</span><strong>${cloud.configured?(cloud.user?'Cloud sync active':'Firebase configured · sign in'):'Local only'}</strong></div>${cloud.user?`<div class="detail-tile"><span>Signed in as</span><strong>${escapeHTML(cloud.user.email||'Private account')}</strong></div>`:''}</div><div class="action-row">${cloud.configured&&cloud.user?`<button class="btn btn-secondary compact-btn" id="syncNow">Sync now</button><button class="btn btn-ghost compact-btn" id="cloudSignOut">Sign out</button>`:`<button class="btn btn-secondary compact-btn" id="cloudSetupHelp">Cloud setup guide</button>`}</div><p class="card-subtitle" style="margin-top:10px">Planit keeps a local copy for speed and saves the same private data to your cloud account when connected.</p></div>
       <div class="card"><div class="card-head"><div><h3 class="card-title">Backup</h3><p class="card-subtitle">Keep a portable backup in addition to cloud sync.</p></div></div><div class="action-row"><button class="btn btn-secondary compact-btn" id="exportData">Export backup</button><label class="btn btn-secondary compact-btn" style="cursor:pointer">Import backup<input type="file" id="importData" accept="application/json" hidden></label></div></div>
       <div class="card"><div class="card-head"><div><h3 class="card-title">Sample data</h3><p class="card-subtitle">Useful if you want to test every screen before entering your real information.</p></div></div><button class="btn btn-secondary compact-btn" id="loadDemo">Load sample data</button></div>
       <div class="card"><div class="card-head"><div><h3 class="card-title">Reset</h3><p class="card-subtitle">Deletes Planit data stored in this browser.</p></div></div><button class="btn btn-danger-soft compact-btn" id="resetData">Clear all local data</button></div></div>`;
     $('#saveSettings').onclick=()=>{state.data.settings.name=$('#settingName').value.trim()||'Marly';state.data.settings.currency=$('#settingCurrency').value.trim()||'$';state.data.settings.defaultDuration=Number($('#settingDuration').value);state.data.settings.snapMinutes=Number($('#settingSnap').value);saveData();toast('Settings saved.');renderDashboard();};
     $('#syncNow')?.addEventListener('click',async()=>{await pullCloudState();toast(cloud.status==='synced'?'Planit is synced across your devices.':'Sync check finished.');});
     $('#cloudSignOut')?.addEventListener('click',()=>confirmAction('Sign out of cloud sync?','Your local copy stays on this device, but new changes will not sync until you sign back in.','Sign out',cloudSignOut));
-    $('#cloudSetupHelp')?.addEventListener('click',()=>openModal('Cloud sync setup','One-time setup lets the same private Planit data appear on every device.',`<div class="detail-block"><div class="list-row"><div><div class="list-title">1 · Create a free Supabase project</div><div class="list-meta">Use the setup guide included in the ZIP.</div></div></div><div class="list-row"><div><div class="list-title">2 · Run supabase-setup.sql</div><div class="list-meta">This creates your private, owner-only data table.</div></div></div><div class="list-row"><div><div class="list-title">3 · Fill cloud-config.js</div><div class="list-meta">Add the project URL, anon key and optionally your email.</div></div></div><div class="list-row"><div><div class="list-title">4 · Deploy Planit once</div><div class="list-meta">Open the same HTTPS URL on MacBook, iPad and phone, then sign in.</div></div></div></div>`,[{label:'Got it',kind:'primary',action:closeModal}]));
+    $('#cloudSetupHelp')?.addEventListener('click',()=>openModal('Cloud sync setup','Planit uses Firebase for your private login and synced data, with GitHub + Vercel for deployment.',`<div class="detail-block"><div class="list-row"><div><div class="list-title">1 · Create Firebase</div><div class="list-meta">Enable Email/Password Authentication, create your one private user, and create Cloud Firestore.</div></div></div><div class="list-row"><div><div class="list-title">2 · Publish the included Firestore rules</div><div class="list-meta">The rules already restrict every user to their own Planit data. No UID editing is required.</div></div></div><div class="list-row"><div><div class="list-title">3 · Add 3 values in Vercel</div><div class="list-meta">Copy API key, Project ID, and App ID from Firebase into Vercel Environment Variables. You never edit Planit code.</div></div></div><div class="list-row"><div><div class="list-title">4 · Use the same Vercel URL everywhere</div><div class="list-meta">Sign in on MacBook, iPad, and phone with the same private account.</div></div></div></div>`,[{label:'Got it',kind:'primary',action:closeModal}]));
     $('#exportData').onclick=exportBackup; $('#importData').onchange=importBackup; $('#loadDemo').onclick=()=>confirmAction('Load sample data?','This adds sample courses, students and sessions without deleting your existing data.','Load sample',()=>{loadDemoData();saveData();renderAllVisible();toast('Sample data added.');});
     $('#resetData').onclick=()=>confirmAction('Clear all local data?','This cannot be undone unless you exported a backup first.','Clear data',()=>{state.data=blankData();saveData();closeDrawer();setView('dashboard');toast('Local data cleared.');},true);
   }
@@ -713,8 +729,9 @@
     if(type==='tutoring') return openTutoringForm(existing,{date,start,duration});
     const labels={class:'University class',study:'Study block',exam:'Exam',assignment:'Assignment',personal:'Personal event'};
     const isAssignment=type==='assignment';
-    openModal(existing?`Edit ${labels[type]}`:`Add ${labels[type]}`,existing?'Update the same calendar item — no duplicates.':'It will appear automatically on your main calendar.',`<div class="form-grid"><label class="form-field full"><span class="form-label">Course</span><select class="select" id="eventCourse">${courseOptions(existing?.courseId||'')}</select></label><label class="form-field full"><span class="form-label">${type==='exam'?'Exam name':type==='assignment'?'Assignment':'Title / focus'}</span><input class="input" id="eventTitle" value="${escapeHTML(existing?.title||'')}" placeholder="${type==='exam'?'Midterm':type==='assignment'?'Case presentation':type==='study'?'Local anesthesia review':type==='class'?'Lecture / clinic':'Event'}"></label><label class="form-field"><span class="form-label">${isAssignment?'Due date':'Date'}</span><input class="input" id="eventDate" type="date" value="${date}"></label>${!isAssignment?`<label class="form-field"><span class="form-label">Start time</span><input class="input" id="eventStart" type="time" step="900" value="${start}"></label><label class="form-field"><span class="form-label">Duration</span><select class="select" id="eventDuration">${durationOptions(duration)}</select></label>`:''}<label class="form-field ${isAssignment?'':'full'}"><span class="form-label">Notes</span><textarea class="textarea" id="eventNotes">${escapeHTML(existing?.notes||'')}</textarea></label></div>`,[
-      {label:'Cancel',kind:'secondary',action:closeModal},{label:existing?'Save changes':'Add',kind:'primary',action:()=>{const dateVal=$('#eventDate').value;if(!dateVal)return formError('Choose a date.');const obj={type,title:$('#eventTitle').value.trim()||labels[type],courseId:$('#eventCourse').value,date:dateVal,start:isAssignment?'':$('#eventStart').value,plannedDuration:isAssignment?0:Number($('#eventDuration').value),notes:$('#eventNotes').value.trim(),status:existing?.status||'scheduled',completed:existing?.completed||false};if(existing){const old={date:existing.date,start:existing.start};Object.assign(existing,obj);if(old.date!==obj.date||old.start!==obj.start){existing.history??=[];existing.history.push({type:'reschedule',from:old,to:{date:obj.date,start:obj.start},at:new Date().toISOString()});}}else state.data.events.push({id:uid(),...obj,history:[]});saveData();closeModal();renderAllVisible();toast(existing?'Event updated.':'Added to Planit.');}}
+    const assignmentTime=existing?.start||prefill.start||'';
+    openModal(existing?`Edit ${labels[type]}`:`Add ${labels[type]}`,existing?'Update the same calendar item — no duplicates.':'It will appear automatically on your main calendar.',`<div class="form-grid"><label class="form-field full"><span class="form-label">Course</span><select class="select" id="eventCourse">${courseOptions(existing?.courseId||'')}</select></label><label class="form-field full"><span class="form-label">${type==='exam'?'Exam name':type==='assignment'?'Assignment':'Title / focus'}</span><input class="input" id="eventTitle" value="${escapeHTML(existing?.title||'')}" placeholder="${type==='exam'?'Midterm':type==='assignment'?'Case presentation':type==='study'?'Local anesthesia review':type==='class'?'Lecture / clinic':'Event'}"></label><label class="form-field"><span class="form-label">${isAssignment?'Due date':'Date'}</span><input class="input" id="eventDate" type="date" value="${date}"></label>${isAssignment?`<label class="form-field"><span class="form-label">Due time</span><input class="input" id="eventStart" type="time" step="900" value="${assignmentTime}"><span class="form-hint">Optional — use it when the assignment has a specific deadline time.</span></label>`:`<label class="form-field"><span class="form-label">Start time</span><input class="input" id="eventStart" type="time" step="900" value="${start}"></label><label class="form-field"><span class="form-label">Duration</span><select class="select" id="eventDuration">${durationOptions(duration)}</select></label>`}<label class="form-field full"><span class="form-label">Notes</span><textarea class="textarea" id="eventNotes">${escapeHTML(existing?.notes||'')}</textarea></label></div>`,[
+      {label:'Cancel',kind:'secondary',action:closeModal},{label:existing?'Save changes':'Add',kind:'primary',action:()=>{const dateVal=$('#eventDate').value;if(!dateVal)return formError('Choose a date.');const obj={type,title:$('#eventTitle').value.trim()||labels[type],courseId:$('#eventCourse').value,date:dateVal,start:$('#eventStart').value,plannedDuration:isAssignment?0:Number($('#eventDuration').value),notes:$('#eventNotes').value.trim(),status:existing?.status||'scheduled',completed:existing?.completed||false};if(existing){const old={date:existing.date,start:existing.start};Object.assign(existing,obj);if(old.date!==obj.date||old.start!==obj.start){existing.history??=[];existing.history.push({type:'reschedule',from:old,to:{date:obj.date,start:obj.start},at:new Date().toISOString()});}}else state.data.events.push({id:uid(),...obj,history:[]});saveData();closeModal();renderAllVisible();toast(existing?'Event updated.':'Added to Planit.');}}
     ]);
   }
 
@@ -783,7 +800,7 @@
     const e=getEvent(id);if(!e)return;state.drawer={type:'event',id};
     $('#drawerEyebrow').textContent=e.type==='tutoring'?'Tutoring session':e.type;
     $('#drawerTitle').textContent=eventTitle(e);
-    const course=eventCourse(e); let body=`<div class="detail-block"><div class="detail-grid"><div class="detail-tile"><span>Date</span><strong>${formatDate(e.date,{month:'short',day:'numeric',year:'numeric'})}</strong></div><div class="detail-tile"><span>Time</span><strong>${e.start?formatTime(e.start):'All day'}</strong></div>${e.plannedDuration?`<div class="detail-tile"><span>Duration</span><strong>${durationLabel(eventDuration(e))}</strong></div>`:''}<div class="detail-tile"><span>Course</span><strong>${escapeHTML(course?.code||'—')}</strong></div></div></div>`;
+    const course=eventCourse(e); let body=`<div class="detail-block"><div class="detail-grid"><div class="detail-tile"><span>Date</span><strong>${formatDate(e.date,{month:'short',day:'numeric',year:'numeric'})}</strong></div><div class="detail-tile"><span>${e.type==='assignment'?'Due time':'Time'}</span><strong>${e.start?formatTime(e.start):e.type==='assignment'?'No specific time':'All day'}</strong></div>${e.plannedDuration?`<div class="detail-tile"><span>Duration</span><strong>${durationLabel(eventDuration(e))}</strong></div>`:''}<div class="detail-tile"><span>Course</span><strong>${escapeHTML(course?.code||'—')}</strong></div></div></div>`;
     if(e.type==='tutoring') {
       const charges=chargeItemsForEvent(e), total=charges.reduce((s,x)=>s+x.amount,0), paid=charges.reduce((s,x)=>s+x.paid,0);
       body+=`<div class="detail-block"><div class="detail-label">Session</div><div class="action-row">${sessionStatusBadge(e)}${e.status==='finished'?`<span class="badge badge-neutral">${readableMoney(total)}</span>`:''}</div></div>`;
@@ -890,9 +907,7 @@
     $('#quickAddButton').onclick=()=>openQuickAdd();
     $('#searchButton').onclick=openCommand;
     $('#syncStatus').onclick=()=>setView('settings');
-    $('#authForm').onsubmit=e=>{e.preventDefault();if(!cloud.client)return showAuthError('Cloud sync is not configured yet.');cloudSignIn($('#authEmail').value.trim(),$('#authPassword').value);};
-    $('#authSignUp').onclick=()=>{if(!cloud.client)return showAuthError('Cloud sync is not configured yet.');cloudSignUp($('#authEmail').value.trim(),$('#authPassword').value);};
-    if(cloudConfig().allowSignup===false) $('#authSignUp').classList.add('hidden');
+    $('#authForm').onsubmit=e=>{e.preventDefault();if(!cloud.auth)return showAuthError('Firebase sync is not configured yet.');cloudSignIn($('#authEmail').value.trim(),$('#authPassword').value);};
     $('#modalClose').onclick=$('#modalBackdrop').onclick=closeModal;
     $('#drawerClose').onclick=closeDrawer;
     $('#commandBackdrop').onclick=closeCommand;

@@ -130,15 +130,16 @@
         <label class="form-field"><span class="form-label">Email</span><input class="input" id="authEmail" type="email" autocomplete="email" required placeholder="you@example.com"></label>
         <label class="form-field"><span class="form-label">Password</span><input class="input" id="authPassword" type="password" autocomplete="current-password" minlength="6" required placeholder="Your private password"></label>
         <p class="auth-error hidden" id="authError"></p>
-        <button class="btn btn-primary" type="submit" id="authSignIn">Sign in</button>
-        <button class="btn btn-secondary" type="button" id="authSignUp">Create my private account</button>
+        <button class="btn btn-primary" type="submit" id="authSignIn">Sign in to Planit</button>
       </form>
       <p class="auth-foot">Your Planit data stays inside your private account. Other people do not get access to your students, payments or schedule.</p>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="cloud-config.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore-compat.js"></script>
+  <script src="/api/firebase-config.js"></script>
   <script src="app.js" defer></script>
 </body>
 </html>

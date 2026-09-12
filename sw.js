@@ -1,4 +1,4 @@
-const CACHE = 'planit-v2';
+const CACHE = 'planit-v4';
 const ASSETS = ['./','./index.html','./styles.css','./app.js','./manifest.webmanifest','./icon.svg'];
 self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).catch(() => {})));
 self.addEventListener('activate', event => event.waitUntil(
@@ -7,8 +7,8 @@ self.addEventListener('activate', event => event.waitUntil(
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.pathname.endsWith('/cloud-config.js')) {
-    event.respondWith(fetch(event.request).catch(() => caches.match(event.request)));
+  if (url.pathname === '/api/firebase-config.js') {
+    event.respondWith(fetch(event.request, {cache:'no-store'}));
     return;
   }
   event.respondWith(caches.match(event.request).then(hit => hit || fetch(event.request).then(resp => {
