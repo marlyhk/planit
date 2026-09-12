@@ -12,17 +12,17 @@ The SQL creates one private JSON data row per authenticated user and enables Row
 
 ## 2. Add your Planit cloud keys
 
-In Supabase, open **Project Settings → API** and copy:
+In Supabase, open **the project Connect/API settings** and copy:
 
 - Project URL
-- anon/public key
+- Publishable key (older projects may call this the anon/public key)
 
 Open `cloud-config.js` and replace the two placeholder values:
 
 ```js
 window.PLANIT_CLOUD_CONFIG = {
   supabaseUrl: "https://YOUR_PROJECT.supabase.co",
-  supabaseAnonKey: "YOUR_ANON_KEY",
+  supabaseAnonKey: "YOUR_PUBLISHABLE_KEY",
   allowedEmail: "your-email@example.com",
   allowSignup: true
 };
@@ -32,7 +32,7 @@ window.PLANIT_CLOUD_CONFIG = {
 
 ## 3. Deploy Planit once
 
-Upload the whole `planit-website` folder to any static HTTPS host, for example Vercel, Netlify, Cloudflare Pages, GitHub Pages, or similar.
+For this package, publish the files with **GitHub Pages**. Keep `index.html` at the repository root. See `GITHUB-SETUP.md` for the exact GitHub flow.
 
 Use that same deployed URL on every device. Do not keep separate copies at different URLs if you want one shared Planit.
 
@@ -63,4 +63,4 @@ For a true one-person app:
 
 ## Important
 
-The Supabase anon/public key is designed to be present in browser apps. Security comes from authentication + Row Level Security, which the included SQL enables. Never place a Supabase **service role** key in `cloud-config.js`.
+The Supabase Publishable key (older projects may call this the anon/public key) is designed to be present in browser apps. Security comes from authentication + Row Level Security, which the included SQL enables. Never place a Supabase **service role** key in `cloud-config.js`.

@@ -49,7 +49,7 @@ Cloud authentication is meant to be used from the final deployed HTTPS URL.
 
 ## Cloud files
 
-- `cloud-config.js` — your Supabase project URL, anon key, optional owner email
+- `cloud-config.js` — your Supabase project URL, publishable/anon key, optional owner email
 - `supabase-setup.sql` — creates the private cloud storage table + Row Level Security
 - `CLOUD-SYNC-SETUP.md` — step-by-step setup
 
@@ -57,4 +57,9 @@ Cloud authentication is meant to be used from the final deployed HTTPS URL.
 
 Students and groups are records inside your private account; they are not users and never receive login access. Each authenticated Planit user can only read/write their own cloud row under the included Row Level Security policies.
 
-Do not put a Supabase service-role key into this website. Only use the anon/public key.
+Do not put a Supabase service-role key into this website. Only use the browser-safe Publishable/anon key.
+
+
+## GitHub Pages
+
+For GitHub deployment, read **`GITHUB-SETUP.md`** first. The repository must have `index.html` at its root; do not upload the ZIP itself and expect GitHub to unpack it.
